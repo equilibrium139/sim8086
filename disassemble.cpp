@@ -33,6 +33,10 @@ const char* addressExpressions[] = {
 	"bx"
 };
 
+const char* jmpInstructions[] = {
+	"jo", "jno", "jb", "jnb", "je", "jne", "jbe", "jnbe", "js", "jns", "jp", "jnp", "jl", "jnl", "jle", "jnle"
+};
+
 int DecodeModRegRmInstr(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t dw);
 int DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t sw);
 int DecodeArithmeticImmediateAcc(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t w);
@@ -131,6 +135,38 @@ int main(int argc, char** argv)
 		{
 			asmInstr += "cmp ";
 			i = DecodeArithmeticImmediateAcc(binaryStream, i, asmInstr, byte1 & 0b1);
+		}
+		else if ((byte1 >> 4) == 0b0111)
+		{
+			std::uint8_t opcode = byte1 & 0b1111;
+			asmInstr += jmpInstructions[opcode];
+			std::uint8_t byte2 = binaryStream[i++];
+			std::int8_t offset = byte2;
+			asmInstr += " ";
+			asmInstr += std::to_string(offset);
+		}
+		else if ((byte1 >> 4) == 0b1110)
+		{
+			std::uint8_t opcode = byte1 & 0b1111;
+			if (opcode == 0b0010)
+			{
+				asmInstr += "loop ";
+			}
+			else if (opcode == 0b0001)
+			{
+				asmInstr += "loopz ";
+			}
+			else if (opcode == 0)
+			{
+				asmInstr += "loopnz ";
+			}
+			else if (opcode == 0b0011)
+			{
+				asmInstr += "jcxz ";
+			}
+			std::uint8_t byte2 = binaryStream[i++];
+			std::int8_t offset = byte2;
+			asmInstr += std::to_string(offset);
 		}
 		else
 		{
