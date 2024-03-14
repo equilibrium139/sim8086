@@ -4,6 +4,8 @@
 #include <string>
 #include <span>
 #include <vector>
+#include <cassert>
+#include <format>
 
 /* 
 * mod (addresing mode) bits: 11 => register-register, otherwise memory is involved
@@ -11,7 +13,7 @@
 * when memory involved, d field also determines if reg field is dest (read) or source (write)
 */
 
-const char* registers[] = {
+const char* registerNames[] = {
 	"al", "ax",
 	"cl", "cx",
 	"dl", "dx",
@@ -37,7 +39,54 @@ const char* jmpInstructions[] = {
 	"jo", "jno", "jb", "jnb", "je", "jne", "jbe", "jnbe", "js", "jns", "jp", "jnp", "jl", "jnl", "jle", "jnle"
 };
 
-int DecodeModRegRmInstr(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t dw);
+enum RegisterIndex
+{
+	a, b, c, d, sp, bp, si, di
+};
+
+struct RegisterOperand
+{
+	RegisterIndex idx;
+	int mode; // 0 = l, 1 = h, 2 = x
+};
+
+RegisterOperand registerOperands[] = {
+	{RegisterIndex::a, 0}, {RegisterIndex::a, 2},
+	{RegisterIndex::c, 0}, {RegisterIndex::c, 2},
+	{RegisterIndex::d, 0}, {RegisterIndex::d, 2},
+	{RegisterIndex::b, 0}, {RegisterIndex::b, 2},
+	{RegisterIndex::a, 1}, {RegisterIndex::sp, 2},
+	{RegisterIndex::b, 1}, {RegisterIndex::bp, 2},
+	{RegisterIndex::c, 1}, {RegisterIndex::si, 2},
+	{RegisterIndex::d, 1}, {RegisterIndex::di, 2},
+};
+
+std::uint16_t registers[8] = {};
+
+struct Operand
+{
+	enum Type
+	{
+		Register, Immediate
+	};
+
+	Type type;
+
+	union
+	{
+		RegisterOperand reg;
+		std::uint16_t immediate;
+	};
+};
+
+struct InstructionData
+{
+	Operand src;
+	Operand dst;
+	int streamIdx;
+};
+
+InstructionData DecodeModRegRmInstr(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t dw);
 int DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t sw);
 int DecodeArithmeticImmediateAcc(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t w);
 
@@ -71,14 +120,32 @@ int main(int argc, char** argv)
 		if ((byte1 >> 2) == 0b100010) // r/m to/from register mov
 		{
 			asmInstr += "mov ";
-			i = DecodeModRegRmInstr(binaryStream, i, asmInstr, byte1 & 0b00000011);
+			InstructionData instrData = DecodeModRegRmInstr(binaryStream, i, asmInstr, byte1 & 0b00000011);
+			i = instrData.streamIdx;
+			assert(instrData.dst.type == Operand::Type::Register && instrData.src.type == Operand::Type::Register);
+			std::uint16_t oldValue = registers[instrData.dst.reg.idx];
+			if (instrData.dst.reg.mode == 0)
+			{
+				std::uint16_t newValue = (registers[instrData.dst.reg.idx] & 0xFF00) | (registers[instrData.src.reg.idx] & 0x00FF);
+				registers[instrData.dst.reg.idx] = newValue;
+			}
+			else if (instrData.dst.reg.mode == 1)
+			{
+				std::uint16_t newValue = (registers[instrData.dst.reg.idx] & 0x00FF) | (registers[instrData.src.reg.idx] & 0xFF00);
+				registers[instrData.dst.reg.idx] = newValue;
+			}
+			else
+			{
+				registers[instrData.dst.reg.idx] = registers[instrData.src.reg.idx];
+			}
+			asmInstr += std::format(" ; {}:{:x}->{:x}", registerNames[instrData.dst.reg.idx], oldValue, registers[instrData.dst.reg.idx]);
 		}
 		else if ((byte1 >> 4) == (std::uint8_t)0b1011) // immediate to register
 		{
 			asmInstr += "mov ";
 			std::uint8_t w = (byte1 & 0x08) >> 3;
 			unsigned int registerIndex = ((byte1 << 1) & 0b00001110) | w;
-			asmInstr += registers[registerIndex];
+			asmInstr += registerNames[registerIndex];
 			asmInstr += ",";
 			std::uint16_t immediate = (std::uint8_t)binaryStream[i++];
 			if (w)
@@ -86,21 +153,45 @@ int main(int argc, char** argv)
 				immediate |= (std::uint16_t)binaryStream[i++] << 8;
 			}
 			asmInstr += std::to_string(immediate);
+
+			RegisterOperand reg = registerOperands[registerIndex];
+
+			std::uint16_t oldValue = registers[reg.idx];
+
+			if (reg.mode == 0)
+			{
+				std::uint16_t newValue = (oldValue & 0xFF00) | immediate;
+				registers[reg.idx] = newValue;
+			}
+			else if (reg.mode == 1)
+			{
+				std::uint16_t newValue = (oldValue & 0x00FF) | (immediate << 8);
+				registers[reg.idx] = newValue;
+			}
+			else
+			{
+				registers[reg.idx] = immediate;
+			}
+
+			asmInstr += std::format(" ; {}:{:x}->{:x}", registerNames[registerIndex], oldValue, registers[reg.idx]);
 		}
 		else if ((byte1 >> 2) == 0) 
 		{
 			asmInstr += "add ";
-			i = DecodeModRegRmInstr(binaryStream, i, asmInstr, byte1 & 0b00000011);
+			InstructionData instrData = DecodeModRegRmInstr(binaryStream, i, asmInstr, byte1 & 0b00000011);
+			i = instrData.streamIdx;
 		}
 		else if ((byte1 >> 2) == 0b001010)
 		{
 			asmInstr += "sub ";
-			i = DecodeModRegRmInstr(binaryStream, i, asmInstr, byte1 & 0b00000011);
+			InstructionData instrData = DecodeModRegRmInstr(binaryStream, i, asmInstr, byte1 & 0b00000011);
+			i = instrData.streamIdx;
 		}
 		else if ((byte1 >> 2) == 0b001110)
 		{
 			asmInstr += "cmp ";
-			i = DecodeModRegRmInstr(binaryStream, i, asmInstr, byte1 & 0b00000011);
+			InstructionData instrData = DecodeModRegRmInstr(binaryStream, i, asmInstr, byte1 & 0b00000011);
+			i = instrData.streamIdx;
 		}
 		else if ((byte1 >> 2) == 0b100000)
 		{
@@ -176,10 +267,18 @@ int main(int argc, char** argv)
 		asmFile << asmInstr << "\n";
 		instructionIndex++;
 	}
+
+	std::cout << "Final register values:\n";
+	for (int i = 0; i < 8; i++)
+	{
+		std::cout << std::format("{}:{:x}\n", registerNames[i * 2], registers[i]);
+	}
 }
 
-int DecodeModRegRmInstr(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t dw)
+InstructionData DecodeModRegRmInstr(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t dw)
 {
+	InstructionData instrData;
+
 	bool regIsDest = dw & 0x0002; // d
 	std::uint8_t byte2 = binaryStream[streamIdx++];
 	unsigned int regW = ((byte2 >> 2) & 0x000E) | (dw & 0x0001); // 3 reg bits + w bit
@@ -190,15 +289,27 @@ int DecodeModRegRmInstr(const std::span<std::uint8_t>& binaryStream, int streamI
 	{
 		if (regIsDest)
 		{
-			asmInstr += registers[regW];
+			asmInstr += registerNames[regW];
 			asmInstr += ",";
-			asmInstr += registers[rmW];
+			asmInstr += registerNames[rmW];
+
+			instrData.dst.reg = registerOperands[regW];
+			instrData.dst.type = Operand::Type::Register;
+
+			instrData.src.reg = registerOperands[rmW];
+			instrData.src.type = Operand::Type::Register;
 		}
 		else
 		{
-			asmInstr += registers[rmW];
+			asmInstr += registerNames[rmW];
 			asmInstr += ",";
-			asmInstr += registers[regW];
+			asmInstr += registerNames[regW];
+
+			instrData.dst.reg = registerOperands[rmW];
+			instrData.dst.type = Operand::Type::Register;
+
+			instrData.src.reg = registerOperands[regW];
+			instrData.src.type = Operand::Type::Register;
 		}
 	}
 	else
@@ -226,7 +337,7 @@ int DecodeModRegRmInstr(const std::span<std::uint8_t>& binaryStream, int streamI
 
 		if (regIsDest)
 		{
-			asmInstr += registers[regW];
+			asmInstr += registerNames[regW];
 			asmInstr += ",";
 			asmInstr += addressOperand;
 		}
@@ -234,11 +345,12 @@ int DecodeModRegRmInstr(const std::span<std::uint8_t>& binaryStream, int streamI
 		{
 			asmInstr += addressOperand;
 			asmInstr += ",";
-			asmInstr += registers[regW];
+			asmInstr += registerNames[regW];
 		}
 	}
 
-	return streamIdx;
+	instrData.streamIdx = streamIdx;
+	return instrData;
 }
 
 // TODO: handle direct addressing
@@ -272,7 +384,7 @@ int DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binaryStream, int
 		}
 		else
 		{
-			destStr = registers[rmW];
+			destStr = registerNames[rmW];
 		}
 
 		std::uint16_t immediate = binaryStream[streamIdx++];
