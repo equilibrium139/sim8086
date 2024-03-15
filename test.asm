@@ -1,13 +1,9 @@
 bits 16
-mov ax,1 ; ax:0->1
-mov bx,2 ; bx:0->2
-mov cx,3 ; cx:0->3
-mov dx,4 ; dx:0->4
-mov sp,ax ; dl:0->1
-mov bp,bx ; dx:0->2
-mov si,cx ; bl:0->3
-mov di,dx ; bx:0->4
-mov dx,sp ; cx:4->1
-mov cx,bp ; cl:3->2
-mov bx,si ; ax:2->3
-mov ax,di ; al:1->4
+mov bx,61443 ; bx:0->f003
+mov cx,3841 ; cx:0->f01
+sub bx,cx ; bx:f003->e102 ; flags:->S
+mov sp,998 ; sp:0->3e6
+mov bp,999 ; bp:0->3e7
+cmp bp,sp ; flags:S->
+add bp,1027 ; bp:3e7->7ea
+sub bp,2026 ; bp:7ea->0 ; flags:->Z

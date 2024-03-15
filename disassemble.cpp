@@ -24,6 +24,29 @@ const char* registerNames[] = {
 	"bh", "di"
 };
 
+enum RegisterIndex
+{
+	a, c, d, b, sp, bp, si, di
+};
+
+struct RegisterOperand
+{
+	RegisterIndex idx;
+	int mode; // 0 = l, 1 = h, 2 = x
+	int nameIdx;
+};
+
+RegisterOperand registerOperands[] = {
+	{RegisterIndex::a, 0, 0}, {RegisterIndex::a, 2, 1},
+	{RegisterIndex::c, 0, 2}, {RegisterIndex::c, 2, 3},
+	{RegisterIndex::d, 0, 4}, {RegisterIndex::d, 2, 5},
+	{RegisterIndex::b, 0, 6}, {RegisterIndex::b, 2, 7},
+	{RegisterIndex::a, 1, 8}, {RegisterIndex::sp, 2, 9},
+	{RegisterIndex::b, 1, 10}, {RegisterIndex::bp, 2, 11},
+	{RegisterIndex::c, 1, 12}, {RegisterIndex::si, 2, 13},
+	{RegisterIndex::d, 1, 14}, {RegisterIndex::di, 2, 15},
+};
+
 const char* addressExpressions[] = {
 	"bx + si",
 	"bx + di",
@@ -37,28 +60,6 @@ const char* addressExpressions[] = {
 
 const char* jmpInstructions[] = {
 	"jo", "jno", "jb", "jnb", "je", "jne", "jbe", "jnbe", "js", "jns", "jp", "jnp", "jl", "jnl", "jle", "jnle"
-};
-
-enum RegisterIndex
-{
-	a, b, c, d, sp, bp, si, di
-};
-
-struct RegisterOperand
-{
-	RegisterIndex idx;
-	int mode; // 0 = l, 1 = h, 2 = x
-};
-
-RegisterOperand registerOperands[] = {
-	{RegisterIndex::a, 0}, {RegisterIndex::a, 2},
-	{RegisterIndex::c, 0}, {RegisterIndex::c, 2},
-	{RegisterIndex::d, 0}, {RegisterIndex::d, 2},
-	{RegisterIndex::b, 0}, {RegisterIndex::b, 2},
-	{RegisterIndex::a, 1}, {RegisterIndex::sp, 2},
-	{RegisterIndex::b, 1}, {RegisterIndex::bp, 2},
-	{RegisterIndex::c, 1}, {RegisterIndex::si, 2},
-	{RegisterIndex::d, 1}, {RegisterIndex::di, 2},
 };
 
 std::uint16_t registers[8] = {};
@@ -86,9 +87,18 @@ struct InstructionData
 	int streamIdx;
 };
 
+enum class ArithmeticOp {
+	add, sub, cmp
+};
+
+bool SF;
+bool ZF;
+
 InstructionData DecodeModRegRmInstr(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t dw);
-int DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t sw);
-int DecodeArithmeticImmediateAcc(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t w);
+InstructionData DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t sw);
+InstructionData DecodeArithmeticImmediateAcc(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t w);
+
+void SimArithmetic(const InstructionData& instrData, ArithmeticOp op, std::string& comment);
 
 int main(int argc, char** argv)
 {
@@ -126,19 +136,19 @@ int main(int argc, char** argv)
 			std::uint16_t oldValue = registers[instrData.dst.reg.idx];
 			if (instrData.dst.reg.mode == 0)
 			{
-				std::uint16_t newValue = (registers[instrData.dst.reg.idx] & 0xFF00) | (registers[instrData.src.reg.idx] & 0x00FF);
+				std::uint16_t newValue = (oldValue & 0xFF00) | (registers[instrData.src.reg.idx] & 0x00FF);
 				registers[instrData.dst.reg.idx] = newValue;
 			}
 			else if (instrData.dst.reg.mode == 1)
 			{
-				std::uint16_t newValue = (registers[instrData.dst.reg.idx] & 0x00FF) | (registers[instrData.src.reg.idx] & 0xFF00);
+				std::uint16_t newValue = (oldValue & 0x00FF) | (registers[instrData.src.reg.idx] & 0xFF00);
 				registers[instrData.dst.reg.idx] = newValue;
 			}
 			else
 			{
 				registers[instrData.dst.reg.idx] = registers[instrData.src.reg.idx];
 			}
-			asmInstr += std::format(" ; {}:{:x}->{:x}", registerNames[instrData.dst.reg.idx], oldValue, registers[instrData.dst.reg.idx]);
+			asmInstr += std::format(" ; {}:{:x}->{:x}", registerNames[instrData.dst.reg.nameIdx], oldValue, registers[instrData.dst.reg.idx]);
 		}
 		else if ((byte1 >> 4) == (std::uint8_t)0b1011) // immediate to register
 		{
@@ -180,52 +190,84 @@ int main(int argc, char** argv)
 			asmInstr += "add ";
 			InstructionData instrData = DecodeModRegRmInstr(binaryStream, i, asmInstr, byte1 & 0b00000011);
 			i = instrData.streamIdx;
+			assert(instrData.dst.type == Operand::Type::Register && instrData.src.type == Operand::Type::Register);
+			std::string comment;
+			SimArithmetic(instrData, ArithmeticOp::add, comment);
+			asmInstr += comment;
 		}
 		else if ((byte1 >> 2) == 0b001010)
 		{
 			asmInstr += "sub ";
 			InstructionData instrData = DecodeModRegRmInstr(binaryStream, i, asmInstr, byte1 & 0b00000011);
 			i = instrData.streamIdx;
+			assert(instrData.dst.type == Operand::Type::Register && instrData.src.type == Operand::Type::Register);
+			std::string comment;
+			SimArithmetic(instrData, ArithmeticOp::sub, comment);
+			asmInstr += comment;
 		}
 		else if ((byte1 >> 2) == 0b001110)
 		{
 			asmInstr += "cmp ";
 			InstructionData instrData = DecodeModRegRmInstr(binaryStream, i, asmInstr, byte1 & 0b00000011);
 			i = instrData.streamIdx;
+			assert(instrData.dst.type == Operand::Type::Register && instrData.src.type == Operand::Type::Register);
+			std::string comment;
+			SimArithmetic(instrData, ArithmeticOp::cmp, comment);
+			asmInstr += comment;
 		}
 		else if ((byte1 >> 2) == 0b100000)
 		{
 			std::uint8_t opcode = binaryStream[i];
 			opcode = (opcode & 0b00111000) >> 3;
+			std::string operandsStr;
+			InstructionData instrData = DecodeArithmeticImmediateRm(binaryStream, i, operandsStr, byte1 & 0b00000011);
+			i = instrData.streamIdx;
+
+			std::string comment;
 			if (opcode == 0)
 			{
 				asmInstr += "add ";
+				SimArithmetic(instrData, ArithmeticOp::add, comment);
 			}
 			else if (opcode == 0b101)
 			{
 				asmInstr += "sub ";
+				SimArithmetic(instrData, ArithmeticOp::sub, comment);
 			}
 			else if (opcode == 0b111)
 			{
 				asmInstr += "cmp ";
+				SimArithmetic(instrData, ArithmeticOp::cmp, comment);
 			}
 
-			i = DecodeArithmeticImmediateRm(binaryStream, i, asmInstr, byte1 & 0b00000011);
+			asmInstr += operandsStr + comment;
 		}
 		else if ((byte1 >> 1) == 0b0000010)
 		{
 			asmInstr += "add ";
-			i = DecodeArithmeticImmediateAcc(binaryStream, i, asmInstr, byte1 & 0b1);
+			InstructionData instrData = DecodeArithmeticImmediateAcc(binaryStream, i, asmInstr, byte1 & 0b1);
+			i = instrData.streamIdx;
+			std::string comment;
+			SimArithmetic(instrData, ArithmeticOp::add, comment);
+			asmInstr += comment;
 		}
 		else if ((byte1 >> 1) == 0b0010110)
 		{
 			asmInstr += "sub ";
-			i = DecodeArithmeticImmediateAcc(binaryStream, i, asmInstr, byte1 & 0b1);
+			InstructionData instrData = DecodeArithmeticImmediateAcc(binaryStream, i, asmInstr, byte1 & 0b1);
+			i = instrData.streamIdx;
+			std::string comment;
+			SimArithmetic(instrData, ArithmeticOp::sub, comment);
+			asmInstr += comment;
 		}
 		else if ((byte1 >> 1) == 0b0011110)
 		{
 			asmInstr += "cmp ";
-			i = DecodeArithmeticImmediateAcc(binaryStream, i, asmInstr, byte1 & 0b1);
+			InstructionData instrData = DecodeArithmeticImmediateAcc(binaryStream, i, asmInstr, byte1 & 0b1);
+			i = instrData.streamIdx;
+			std::string comment;
+			SimArithmetic(instrData, ArithmeticOp::cmp, comment);
+			asmInstr += comment;
 		}
 		else if ((byte1 >> 4) == 0b0111)
 		{
@@ -271,8 +313,14 @@ int main(int argc, char** argv)
 	std::cout << "Final register values:\n";
 	for (int i = 0; i < 8; i++)
 	{
-		std::cout << std::format("{}:{:x}\n", registerNames[i * 2], registers[i]);
+		std::cout << std::format("{}:{:x}\n", registerNames[i * 2 + 1], registers[i]);
 	}
+
+	std::string flags;
+	if (ZF) flags += "Z";
+	if (SF) flags += "S";
+
+	std::cout << "Flags: " << flags << '\n';
 }
 
 InstructionData DecodeModRegRmInstr(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t dw)
@@ -354,8 +402,9 @@ InstructionData DecodeModRegRmInstr(const std::span<std::uint8_t>& binaryStream,
 }
 
 // TODO: handle direct addressing
-int DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t sw)
+InstructionData DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t sw)
 {
+	InstructionData instrData;
 	bool signExtend = sw & 0b00000010;
 	bool word = sw & 0b00000001;
 	std::uint8_t byte2 = binaryStream[streamIdx++];
@@ -364,6 +413,7 @@ int DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binaryStream, int
 	std::uint8_t rmW = (rm << 1) | word;
 	std::string immediateStr;
 	std::string destStr;
+	// TODO: simulate memory access (return correct operands)
 	if (mode == 0 || mode == 3)
 	{
 		if (mode == 0)
@@ -384,6 +434,8 @@ int DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binaryStream, int
 		}
 		else
 		{
+			instrData.dst.reg = registerOperands[rmW];
+			instrData.dst.type = Operand::Type::Register;
 			destStr = registerNames[rmW];
 		}
 
@@ -393,6 +445,9 @@ int DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binaryStream, int
 			immediate |= (std::uint16_t)binaryStream[streamIdx++] << 8;
 		}
 		immediateStr = std::to_string(immediate);
+
+		instrData.src.immediate = immediate;
+		instrData.src.type = Operand::Type::Immediate;
 	}
 	else
 	{
@@ -417,23 +472,90 @@ int DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binaryStream, int
 	asmInstr += destStr + ",";
 	asmInstr += immediateStr;
 
-	return streamIdx;
+	instrData.streamIdx = streamIdx;
+
+	return instrData;
 }
 
-int DecodeArithmeticImmediateAcc(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t w)
+InstructionData DecodeArithmeticImmediateAcc(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t w)
 {
+	InstructionData instrData;
+	instrData.dst.type = Operand::Type::Register;
 	std::uint16_t immediate = binaryStream[streamIdx++];
 	if (w)
 	{
 		immediate |= (std::uint16_t)binaryStream[streamIdx++] << 8;
 		asmInstr += "ax, ";
+		instrData.dst.reg.idx = RegisterIndex::a;
+		instrData.dst.reg.mode = 2;
 	}
 	else
 	{
 		asmInstr += "al, ";
+		instrData.dst.reg.idx = RegisterIndex::a;
+		instrData.dst.reg.mode = 0;
 	}
 
 	asmInstr += std::to_string(immediate);
 
-	return streamIdx;
+	instrData.src.type = Operand::Type::Immediate;
+	instrData.src.immediate = immediate;
+	instrData.streamIdx = streamIdx;
+
+	return instrData;
+}
+
+void SimArithmetic(const InstructionData& instrData, ArithmeticOp op, std::string& comment)
+{
+	bool oldZF = ZF;
+	bool oldSF = SF;
+	std::string oldFlagsStr;
+	if (oldZF) oldFlagsStr += "Z";
+	if (oldSF) oldFlagsStr += "S";
+
+	// TODO: support memory dst ops
+	assert(instrData.dst.type == Operand::Type::Register);
+	std::uint16_t oldDstValue = registers[instrData.dst.reg.idx];
+	std::uint16_t srcValue;
+	switch (instrData.src.type)
+	{
+	case Operand::Type::Register:
+		srcValue = registers[instrData.src.reg.idx];
+		break;
+	case Operand::Type::Immediate:
+		srcValue = instrData.src.immediate;
+		break;
+	}
+
+	std::uint16_t newValue;
+	switch (op)
+	{
+	case ArithmeticOp::add:
+		newValue = oldDstValue + srcValue;
+		registers[instrData.dst.reg.idx] = newValue;
+		break;
+	case ArithmeticOp::sub:
+		newValue = oldDstValue - srcValue;
+		registers[instrData.dst.reg.idx] = newValue;
+		break;
+	case ArithmeticOp::cmp:
+		newValue = oldDstValue - srcValue;
+		break;
+	}
+	
+	ZF = newValue == 0;
+	SF = newValue >> 15;
+
+	std::string newFlagsStr;
+	if (ZF) newFlagsStr += "Z";
+	if (SF) newFlagsStr += "S";
+
+	if (oldDstValue != registers[instrData.dst.reg.idx])
+	{
+		comment = std::format(" ; {}:{:x}->{:x}", registerNames[instrData.dst.reg.nameIdx], oldDstValue, registers[instrData.dst.reg.idx]);
+	}
+	if (ZF != oldZF || SF != oldSF)
+	{
+		comment += std::format(" ; flags:{}->{}", oldFlagsStr, newFlagsStr);
+	}
 }
