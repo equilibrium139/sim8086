@@ -123,15 +123,16 @@ int main(int argc, char** argv)
 	asmFile << "bits 16\n";
 
 	int instructionIndex = 0;
-	for (unsigned int i = 0; i < binaryStream.size();)
+	for (unsigned int ip = 0; ip < binaryStream.size();)
 	{
-		std::uint8_t byte1 = binaryStream[i++];
+		unsigned int oldIP = ip;
+		std::uint8_t byte1 = binaryStream[ip++];
 		std::string asmInstr;
 		if ((byte1 >> 2) == 0b100010) // r/m to/from register mov
 		{
 			asmInstr += "mov ";
-			InstructionData instrData = DecodeModRegRmInstr(binaryStream, i, asmInstr, byte1 & 0b00000011);
-			i = instrData.streamIdx;
+			InstructionData instrData = DecodeModRegRmInstr(binaryStream, ip, asmInstr, byte1 & 0b00000011);
+			ip = instrData.streamIdx;
 			assert(instrData.dst.type == Operand::Type::Register && instrData.src.type == Operand::Type::Register);
 			std::uint16_t oldValue = registers[instrData.dst.reg.idx];
 			if (instrData.dst.reg.mode == 0)
@@ -157,10 +158,10 @@ int main(int argc, char** argv)
 			unsigned int registerIndex = ((byte1 << 1) & 0b00001110) | w;
 			asmInstr += registerNames[registerIndex];
 			asmInstr += ",";
-			std::uint16_t immediate = (std::uint8_t)binaryStream[i++];
+			std::uint16_t immediate = (std::uint8_t)binaryStream[ip++];
 			if (w)
 			{
-				immediate |= (std::uint16_t)binaryStream[i++] << 8;
+				immediate |= (std::uint16_t)binaryStream[ip++] << 8;
 			}
 			asmInstr += std::to_string(immediate);
 
@@ -188,8 +189,8 @@ int main(int argc, char** argv)
 		else if ((byte1 >> 2) == 0) 
 		{
 			asmInstr += "add ";
-			InstructionData instrData = DecodeModRegRmInstr(binaryStream, i, asmInstr, byte1 & 0b00000011);
-			i = instrData.streamIdx;
+			InstructionData instrData = DecodeModRegRmInstr(binaryStream, ip, asmInstr, byte1 & 0b00000011);
+			ip = instrData.streamIdx;
 			assert(instrData.dst.type == Operand::Type::Register && instrData.src.type == Operand::Type::Register);
 			std::string comment;
 			SimArithmetic(instrData, ArithmeticOp::add, comment);
@@ -198,8 +199,8 @@ int main(int argc, char** argv)
 		else if ((byte1 >> 2) == 0b001010)
 		{
 			asmInstr += "sub ";
-			InstructionData instrData = DecodeModRegRmInstr(binaryStream, i, asmInstr, byte1 & 0b00000011);
-			i = instrData.streamIdx;
+			InstructionData instrData = DecodeModRegRmInstr(binaryStream, ip, asmInstr, byte1 & 0b00000011);
+			ip = instrData.streamIdx;
 			assert(instrData.dst.type == Operand::Type::Register && instrData.src.type == Operand::Type::Register);
 			std::string comment;
 			SimArithmetic(instrData, ArithmeticOp::sub, comment);
@@ -208,8 +209,8 @@ int main(int argc, char** argv)
 		else if ((byte1 >> 2) == 0b001110)
 		{
 			asmInstr += "cmp ";
-			InstructionData instrData = DecodeModRegRmInstr(binaryStream, i, asmInstr, byte1 & 0b00000011);
-			i = instrData.streamIdx;
+			InstructionData instrData = DecodeModRegRmInstr(binaryStream, ip, asmInstr, byte1 & 0b00000011);
+			ip = instrData.streamIdx;
 			assert(instrData.dst.type == Operand::Type::Register && instrData.src.type == Operand::Type::Register);
 			std::string comment;
 			SimArithmetic(instrData, ArithmeticOp::cmp, comment);
@@ -217,11 +218,11 @@ int main(int argc, char** argv)
 		}
 		else if ((byte1 >> 2) == 0b100000)
 		{
-			std::uint8_t opcode = binaryStream[i];
+			std::uint8_t opcode = binaryStream[ip];
 			opcode = (opcode & 0b00111000) >> 3;
 			std::string operandsStr;
-			InstructionData instrData = DecodeArithmeticImmediateRm(binaryStream, i, operandsStr, byte1 & 0b00000011);
-			i = instrData.streamIdx;
+			InstructionData instrData = DecodeArithmeticImmediateRm(binaryStream, ip, operandsStr, byte1 & 0b00000011);
+			ip = instrData.streamIdx;
 
 			std::string comment;
 			if (opcode == 0)
@@ -245,8 +246,8 @@ int main(int argc, char** argv)
 		else if ((byte1 >> 1) == 0b0000010)
 		{
 			asmInstr += "add ";
-			InstructionData instrData = DecodeArithmeticImmediateAcc(binaryStream, i, asmInstr, byte1 & 0b1);
-			i = instrData.streamIdx;
+			InstructionData instrData = DecodeArithmeticImmediateAcc(binaryStream, ip, asmInstr, byte1 & 0b1);
+			ip = instrData.streamIdx;
 			std::string comment;
 			SimArithmetic(instrData, ArithmeticOp::add, comment);
 			asmInstr += comment;
@@ -254,8 +255,8 @@ int main(int argc, char** argv)
 		else if ((byte1 >> 1) == 0b0010110)
 		{
 			asmInstr += "sub ";
-			InstructionData instrData = DecodeArithmeticImmediateAcc(binaryStream, i, asmInstr, byte1 & 0b1);
-			i = instrData.streamIdx;
+			InstructionData instrData = DecodeArithmeticImmediateAcc(binaryStream, ip, asmInstr, byte1 & 0b1);
+			ip = instrData.streamIdx;
 			std::string comment;
 			SimArithmetic(instrData, ArithmeticOp::sub, comment);
 			asmInstr += comment;
@@ -263,8 +264,8 @@ int main(int argc, char** argv)
 		else if ((byte1 >> 1) == 0b0011110)
 		{
 			asmInstr += "cmp ";
-			InstructionData instrData = DecodeArithmeticImmediateAcc(binaryStream, i, asmInstr, byte1 & 0b1);
-			i = instrData.streamIdx;
+			InstructionData instrData = DecodeArithmeticImmediateAcc(binaryStream, ip, asmInstr, byte1 & 0b1);
+			ip = instrData.streamIdx;
 			std::string comment;
 			SimArithmetic(instrData, ArithmeticOp::cmp, comment);
 			asmInstr += comment;
@@ -273,10 +274,14 @@ int main(int argc, char** argv)
 		{
 			std::uint8_t opcode = byte1 & 0b1111;
 			asmInstr += jmpInstructions[opcode];
-			std::uint8_t byte2 = binaryStream[i++];
+			std::uint8_t byte2 = binaryStream[ip++];
 			std::int8_t offset = byte2;
 			asmInstr += " ";
 			asmInstr += std::to_string(offset);
+			if (jmpInstructions[opcode] == "jne" && !ZF) // only simulating jne for the hw
+			{
+				ip += offset;
+			}
 		}
 		else if ((byte1 >> 4) == 0b1110)
 		{
@@ -297,7 +302,7 @@ int main(int argc, char** argv)
 			{
 				asmInstr += "jcxz ";
 			}
-			std::uint8_t byte2 = binaryStream[i++];
+			std::uint8_t byte2 = binaryStream[ip++];
 			std::int8_t offset = byte2;
 			asmInstr += std::to_string(offset);
 		}
@@ -306,6 +311,8 @@ int main(int argc, char** argv)
 			std::cerr << "Instruction not supported\n";
 			break;
 		}
+
+		asmInstr += std::format(" ; ip:0x{:x}->0x{:x}", oldIP, ip);
 		asmFile << asmInstr << "\n";
 		instructionIndex++;
 	}

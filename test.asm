@@ -1,9 +1,12 @@
 bits 16
-mov bx,61443 ; bx:0->f003
-mov cx,3841 ; cx:0->f01
-sub bx,cx ; bx:f003->e102 ; flags:->S
-mov sp,998 ; sp:0->3e6
-mov bp,999 ; bp:0->3e7
-cmp bp,sp ; flags:S->
-add bp,1027 ; bp:3e7->7ea
-sub bp,2026 ; bp:7ea->0 ; flags:->Z
+mov cx,3 ; cx:0->3 ; ip:0x0->0x3
+mov bx,1000 ; bx:0->3e8 ; ip:0x3->0x6
+add bx,10 ; bx:3e8->3f2 ; ip:0x6->0x9
+sub cx,1 ; cx:3->2 ; ip:0x9->0xc
+jne -8 ; ip:0xc->0x6
+add bx,10 ; bx:3f2->3fc ; ip:0x6->0x9
+sub cx,1 ; cx:2->1 ; ip:0x9->0xc
+jne -8 ; ip:0xc->0x6
+add bx,10 ; bx:3fc->406 ; ip:0x6->0x9
+sub cx,1 ; cx:1->0 ; flags:->Z ; ip:0x9->0xc
+jne -8 ; ip:0xc->0xe
