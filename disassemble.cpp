@@ -68,6 +68,7 @@ struct MemoryOperand
 {
 	int addressExpressionIdx;
 	std::uint16_t displacement;
+	bool word;
 
 	std::uint16_t Address()
 	{
@@ -120,6 +121,7 @@ struct InstructionData
 	Operand src;
 	Operand dst;
 	int streamIdx;
+	bool word;
 };
 
 enum class ArithmeticOp {
@@ -129,7 +131,7 @@ enum class ArithmeticOp {
 bool SF;
 bool ZF;
 
-std::uint16_t memory[UINT16_MAX];
+std::uint8_t memory[UINT16_MAX];
 
 InstructionData DecodeModRegRmInstr(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t dw);
 InstructionData DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t sw);
@@ -141,7 +143,6 @@ int main(int argc, char** argv)
 {
 	const char* binaryFilePath = argv[1];
 	std::ifstream binaryFile(binaryFilePath, std::ios::binary);
-	std::vector<char> fileContents;
 
 	//get length of file
 	binaryFile.seekg(0, binaryFile.end);
@@ -150,11 +151,10 @@ int main(int argc, char** argv)
 
 	//read file
 	if (length > 0) {
-		fileContents.resize(length);
-		binaryFile.read(&fileContents[0], length);
+		binaryFile.read((char*)&memory[0], length);
 	}
 
-	std::span<std::uint8_t> binaryStream((std::uint8_t*)&fileContents[0], fileContents.size());
+	std::span<std::uint8_t> binaryStream(&memory[0], length);
 
 	std::ofstream asmFile("test.asm");
 	asmFile << "bits 16\n";
@@ -252,10 +252,12 @@ int main(int argc, char** argv)
 			InstructionData instrData = DecodeArithmeticImmediateRm(binaryStream, ip, asmInstr, byte1 & 0b1);
 			ip = instrData.streamIdx;
 			assert(instrData.src.type == Operand::Type::Immediate && (instrData.dst.type == Operand::Type::Register || instrData.dst.type == Operand::Type::Memory));
-			// Always operating on word-sized data in hw so not going to bother checking 
 			std::uint16_t address = instrData.dst.mem.Address();
 			memory[address] = instrData.src.immediate;
-			memory[address + 1] = instrData.src.immediate >> 8;
+			if (instrData.word) // needed for listing 54
+			{
+				memory[address + 1] = instrData.src.immediate >> 8;
+			}
 		}
 		else if ((byte1 >> 2) == 0) 
 		{
@@ -391,7 +393,7 @@ int main(int argc, char** argv)
 	std::cout << "Final register values:\n";
 	for (int i = 0; i < 8; i++)
 	{
-		std::cout << std::format("{}:{:x}\n", registerNames[i * 2 + 1], registers[i]);
+		std::cout << std::format("{}:0x{:x}\n", registerNames[i * 2 + 1], registers[i]);
 	}
 
 	std::string flags;
@@ -399,16 +401,19 @@ int main(int argc, char** argv)
 	if (SF) flags += "S";
 
 	std::cout << "Flags: " << flags << '\n';
+
+	std::ofstream dumpFile("sim8086_mem_dump.data", std::ios::binary);
+	dumpFile.write((const char*)&memory[0], UINT16_MAX);
 }
 
 InstructionData DecodeModRegRmInstr(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t dw)
 {
 	InstructionData instrData;
-
+	instrData.word = dw & 0b1;
 	bool regIsDest = dw & 0x0002; // d
 	std::uint8_t byte2 = binaryStream[streamIdx++];
-	unsigned int regW = ((byte2 >> 2) & 0x000E) | (dw & 0x0001); // 3 reg bits + w bit
-	unsigned int rmW = ((byte2 << 1) & 0x000E) | (dw & 0x0001); // 3 r/m bits + w bit
+	unsigned int regW = ((byte2 >> 2) & 0x000E) | (dw & 0x1); // 3 reg bits + w bit
+	unsigned int rmW = ((byte2 << 1) & 0x000E) | (dw & 0x1); // 3 r/m bits + w bit
 	unsigned int rm = rmW >> 1;
 	unsigned int mode = byte2 >> 6; // 2 mod bit
 	if (mode == 3) // simple register-register move
@@ -497,6 +502,7 @@ InstructionData DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binar
 {
 	InstructionData instrData;
 	bool word = sw & 0b00000001;
+	instrData.word = word;
 	std::uint8_t byte2 = binaryStream[streamIdx++];
 	std::uint8_t mode = byte2 >> 6;
 	std::uint8_t rm = byte2 & 0b00000111;
@@ -580,6 +586,7 @@ InstructionData DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binar
 InstructionData DecodeArithmeticImmediateAcc(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t w)
 {
 	InstructionData instrData;
+	instrData.word = w;
 	instrData.dst.type = Operand::Type::Register;
 	std::uint16_t immediate = binaryStream[streamIdx++];
 	if (w)
