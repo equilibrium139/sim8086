@@ -64,11 +64,45 @@ const char* jmpInstructions[] = {
 
 std::uint16_t registers[8] = {};
 
+struct MemoryOperand
+{
+	int addressExpressionIdx;
+	std::uint16_t displacement;
+
+	std::uint16_t Address()
+	{
+		assert(addressExpressionIdx < 8);
+		if (addressExpressionIdx < 0)
+		{
+			return displacement;
+		}
+		switch (addressExpressionIdx)
+		{
+		case 0:
+			return registers[RegisterIndex::b] + registers[RegisterIndex::si] + displacement;
+		case 1:
+			return registers[RegisterIndex::b] + registers[RegisterIndex::di] + displacement;
+		case 2:
+			return registers[RegisterIndex::bp] + registers[RegisterIndex::si] + displacement;
+		case 3:
+			return registers[RegisterIndex::bp] + registers[RegisterIndex::di] + displacement;
+		case 4:
+			return registers[RegisterIndex::si] + displacement;
+		case 5:
+			return registers[RegisterIndex::di] + displacement;
+		case 6:
+			return registers[RegisterIndex::bp] + displacement;
+		case 7:
+			return registers[RegisterIndex::b] + displacement;
+		}
+	}
+};
+
 struct Operand
 {
 	enum Type
 	{
-		Register, Immediate
+		Register, Immediate, Memory
 	};
 
 	Type type;
@@ -77,6 +111,7 @@ struct Operand
 	{
 		RegisterOperand reg;
 		std::uint16_t immediate;
+		MemoryOperand mem;
 	};
 };
 
@@ -93,6 +128,8 @@ enum class ArithmeticOp {
 
 bool SF;
 bool ZF;
+
+std::uint16_t memory[UINT16_MAX];
 
 InstructionData DecodeModRegRmInstr(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t dw);
 InstructionData DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t sw);
@@ -133,23 +170,46 @@ int main(int argc, char** argv)
 			asmInstr += "mov ";
 			InstructionData instrData = DecodeModRegRmInstr(binaryStream, ip, asmInstr, byte1 & 0b00000011);
 			ip = instrData.streamIdx;
-			assert(instrData.dst.type == Operand::Type::Register && instrData.src.type == Operand::Type::Register);
+			//assert(instrData.dst.type == Operand::Type::Register && instrData.src.type == Operand::Type::Register);
 			std::uint16_t oldValue = registers[instrData.dst.reg.idx];
-			if (instrData.dst.reg.mode == 0)
+			std::uint16_t sourceValue;
+			if (instrData.src.type == Operand::Type::Register)
 			{
-				std::uint16_t newValue = (oldValue & 0xFF00) | (registers[instrData.src.reg.idx] & 0x00FF);
-				registers[instrData.dst.reg.idx] = newValue;
-			}
-			else if (instrData.dst.reg.mode == 1)
-			{
-				std::uint16_t newValue = (oldValue & 0x00FF) | (registers[instrData.src.reg.idx] & 0xFF00);
-				registers[instrData.dst.reg.idx] = newValue;
+				sourceValue = registers[instrData.src.reg.idx];
 			}
 			else
 			{
-				registers[instrData.dst.reg.idx] = registers[instrData.src.reg.idx];
+				assert(instrData.src.type == Operand::Type::Memory);
+				std::uint16_t address = instrData.src.mem.Address();
+				sourceValue = memory[address];
+				sourceValue |= (std::uint16_t)memory[address + 1] << 8;
 			}
-			asmInstr += std::format(" ; {}:{:x}->{:x}", registerNames[instrData.dst.reg.nameIdx], oldValue, registers[instrData.dst.reg.idx]);
+			if (instrData.dst.type == Operand::Type::Register)
+			{
+				if (instrData.dst.reg.mode == 0)
+				{
+					std::uint16_t newValue = (oldValue & 0xFF00) | (sourceValue & 0x00FF);
+					registers[instrData.dst.reg.idx] = newValue;
+				}
+				else if (instrData.dst.reg.mode == 1)
+				{
+					std::uint16_t newValue = (oldValue & 0x00FF) | (sourceValue & 0xFF00);
+					registers[instrData.dst.reg.idx] = newValue;
+				}
+				else
+				{
+					registers[instrData.dst.reg.idx] = sourceValue;
+				}
+
+				asmInstr += std::format(" ; {}:{:x}->{:x}", registerNames[instrData.dst.reg.nameIdx], oldValue, registers[instrData.dst.reg.idx]);
+			}
+			else
+			{
+				assert(instrData.dst.type == Operand::Type::Memory);
+				std::uint16_t address = instrData.dst.mem.Address();
+				// assuming word-sized data will be written always
+				memory[address] = sourceValue;
+			}
 		}
 		else if ((byte1 >> 4) == (std::uint8_t)0b1011) // immediate to register
 		{
@@ -185,6 +245,17 @@ int main(int argc, char** argv)
 			}
 
 			asmInstr += std::format(" ; {}:{:x}->{:x}", registerNames[registerIndex], oldValue, registers[reg.idx]);
+		}
+		else if ((byte1 >> 1) == (std::uint8_t)0b1100011) // immediate to r/m
+		{
+			asmInstr += "mov ";
+			InstructionData instrData = DecodeArithmeticImmediateRm(binaryStream, ip, asmInstr, byte1 & 0b1);
+			ip = instrData.streamIdx;
+			assert(instrData.src.type == Operand::Type::Immediate && (instrData.dst.type == Operand::Type::Register || instrData.dst.type == Operand::Type::Memory));
+			// Always operating on word-sized data in hw so not going to bother checking 
+			std::uint16_t address = instrData.dst.mem.Address();
+			memory[address] = instrData.src.immediate;
+			memory[address + 1] = instrData.src.immediate >> 8;
 		}
 		else if ((byte1 >> 2) == 0) 
 		{
@@ -369,15 +440,26 @@ InstructionData DecodeModRegRmInstr(const std::span<std::uint8_t>& binaryStream,
 	}
 	else
 	{
+		instrData.src.reg = registerOperands[regW];
+		instrData.src.type = Operand::Type::Register;
+
 		std::string addressOperand = "[";
 		bool directAddress = rm == 6 && mode == 0;
 		if (directAddress)
 		{
-			std::cerr << "Direct address mode not implemented\n";
+			std::uint16_t displacement = binaryStream[streamIdx++];
+			displacement |= (std::uint16_t)binaryStream[streamIdx++] << 8;
+			addressOperand += std::to_string(displacement);
+			instrData.dst.type = Operand::Type::Memory;
+			instrData.dst.mem.addressExpressionIdx = -1;
+			instrData.dst.mem.displacement = displacement;
 		}
 		else
 		{
 			addressOperand += addressExpressions[rm];
+			instrData.dst.type = Operand::Type::Memory;
+			instrData.dst.mem.addressExpressionIdx = rm;
+			instrData.dst.mem.displacement = 0;
 			if (mode >= 1)
 			{
 				std::uint16_t displacement = (std::uint8_t)binaryStream[streamIdx++];
@@ -386,12 +468,14 @@ InstructionData DecodeModRegRmInstr(const std::span<std::uint8_t>& binaryStream,
 					displacement |= (std::uint16_t)binaryStream[streamIdx++] << 8;
 				}
 				addressOperand += " + " + std::to_string(displacement);
+				instrData.dst.mem.displacement = displacement;
 			}
 		}
 		addressOperand += "]";
 
 		if (regIsDest)
 		{
+			std::swap(instrData.dst, instrData.src);
 			asmInstr += registerNames[regW];
 			asmInstr += ",";
 			asmInstr += addressOperand;
@@ -412,7 +496,6 @@ InstructionData DecodeModRegRmInstr(const std::span<std::uint8_t>& binaryStream,
 InstructionData DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binaryStream, int streamIdx, std::string& asmInstr, std::uint8_t sw)
 {
 	InstructionData instrData;
-	bool signExtend = sw & 0b00000010;
 	bool word = sw & 0b00000001;
 	std::uint8_t byte2 = binaryStream[streamIdx++];
 	std::uint8_t mode = byte2 >> 6;
@@ -420,6 +503,7 @@ InstructionData DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binar
 	std::uint8_t rmW = (rm << 1) | word;
 	std::string immediateStr;
 	std::string destStr;
+	std::uint16_t immediate;
 	// TODO: simulate memory access (return correct operands)
 	if (mode == 0 || mode == 3)
 	{
@@ -431,12 +515,18 @@ InstructionData DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binar
 				displacement |= (std::uint16_t)binaryStream[streamIdx++] << 8;
 				destStr = "word [";
 				destStr += std::to_string(displacement) + "]";
+				instrData.dst.type = Operand::Type::Memory;
+				instrData.dst.mem.addressExpressionIdx = -1;
+				instrData.dst.mem.displacement = displacement;
 			}
 			else
 			{
 				destStr = word ? "word [" : "byte [";
 				destStr += addressExpressions[rm];
 				destStr += "]";
+				instrData.dst.type = Operand::Type::Memory;
+				instrData.dst.mem.addressExpressionIdx = rm;
+				instrData.dst.mem.displacement = 0;
 			}
 		}
 		else
@@ -446,15 +536,12 @@ InstructionData DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binar
 			destStr = registerNames[rmW];
 		}
 
-		std::uint16_t immediate = binaryStream[streamIdx++];
+		immediate = binaryStream[streamIdx++];
 		if (sw == 0b01)
 		{
 			immediate |= (std::uint16_t)binaryStream[streamIdx++] << 8;
 		}
 		immediateStr = std::to_string(immediate);
-
-		instrData.src.immediate = immediate;
-		instrData.src.type = Operand::Type::Immediate;
 	}
 	else
 	{
@@ -464,7 +551,7 @@ InstructionData DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binar
 			displacement |= (std::uint16_t)binaryStream[streamIdx++] << 8;
 		}
 
-		std::uint16_t immediate = binaryStream[streamIdx++];
+		immediate = binaryStream[streamIdx++];
 		if (sw == 0b01)
 		{
 			immediate |= (std::uint16_t)binaryStream[streamIdx++] << 8;
@@ -474,7 +561,13 @@ InstructionData DecodeArithmeticImmediateRm(const std::span<std::uint8_t>& binar
 		destStr = word ? "word [" : "byte [";
 		destStr += addressExpressions[rm];
 		destStr += " + " + std::to_string(displacement) + "]";
+		instrData.dst.type = Operand::Type::Memory;
+		instrData.dst.mem.addressExpressionIdx = rm;
+		instrData.dst.mem.displacement = displacement;
 	}
+
+	instrData.src.immediate = immediate;
+	instrData.src.type = Operand::Type::Immediate;
 
 	asmInstr += destStr + ",";
 	asmInstr += immediateStr;
